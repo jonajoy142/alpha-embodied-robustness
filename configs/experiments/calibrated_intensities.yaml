@@ -1,0 +1,20 @@
+F1_sensor_lag:
+  formula: 0.10 + 1.40 * intensity
+  low_param_seconds: 0.38
+  medium_param_seconds: 0.8
+  high_param_seconds: 1.36
+F2_grip_slip:
+  formula: 0.10 + 0.85 * intensity
+  low_slip_prob: 0.27
+  medium_slip_prob: 0.525
+  high_slip_prob: 0.865
+F3_unreachable_ik:
+  formula: 0.03 + 0.27 * intensity
+  low_offset_meters: 0.0705
+  medium_offset_meters: 0.138
+  high_offset_meters: 0.2595
+F4_planner_corruption:
+  formula: 0.20 + 0.80 * intensity
+  low_corruption_prob: 0.36
+  medium_corruption_prob: 0.6
+  high_corruption_prob: 0.92

@@ -49,9 +49,12 @@ from alpha.services.matrix_episode_runner import execute_matrix_episode
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Week 6 chaos experiment matrix.")
-    parser.add_argument("--agent", choices=["mock", "openai", "ollama"], default="mock",
-                        help="LLM provider. Mock is for engineering/tests only; use openai for formal studies.")
-    parser.add_argument("--model", default="gpt-5")
+    parser.add_argument("--agent", choices=["mock", "openai", "ollama", "scripted_oracle"], default="mock",
+                        help="LLM provider or scripted oracle.")
+    parser.add_argument("--planner-type", choices=["llm", "scripted_oracle"], default="llm",
+                        help="Type of planner: llm or scripted_oracle.")
+    parser.add_argument("--model", default="llama3:latest")
+    parser.add_argument("--experiment-id", default="week6_matrix")
     parser.add_argument("--master-seed", type=int, default=42)
     parser.add_argument("--control-runs", type=int, default=10)
     parser.add_argument("--episodes-per-variation", type=int, default=5)
@@ -60,6 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true", help="Skip runs already present in the checkpoint.")
     parser.add_argument("--dry-run", action="store_true", help="Print the schedule without executing episodes.")
     parser.add_argument("--matrix-log", default=None)
+    parser.add_argument("--telemetry-csv", default=None)
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--summary", default=None)
     return parser.parse_args()
@@ -71,6 +75,7 @@ def main() -> None:
     matrix_log_path = args.matrix_log or paths["matrix_log"]
     checkpoint_path = args.checkpoint or paths["checkpoint"]
     summary_path = args.summary or paths["summary"]
+    telemetry_csv_path = args.telemetry_csv or settings.EXPERIMENTS_CSV
 
     scenarios = generate_matrix_scenarios(
         master_seed=args.master_seed,
@@ -85,7 +90,7 @@ def main() -> None:
     print(f"  scheduled episodes: {len(scenarios)} (expected {expected_total})")
     print(f"  agent provider: {args.agent}")
     print(f"  matrix log: {matrix_log_path}")
-    print(f"  telemetry log: {settings.EXPERIMENTS_CSV}")
+    print(f"  telemetry log: {telemetry_csv_path}")
     print(f"  checkpoint: {checkpoint_path}")
 
     if args.dry_run:
@@ -94,9 +99,18 @@ def main() -> None:
         return
 
     completed = load_checkpoint(checkpoint_path) if args.resume else set()
-    telemetry = ChaosTelemetryLogger()
+    telemetry = ChaosTelemetryLogger(csv_path=telemetry_csv_path)
     episode_repo = EpisodeRepository()
-    agent_config = AgentConfig(provider=args.agent, model_name=args.model)
+    planner_type = "scripted_oracle" if (args.agent == "scripted_oracle" or args.planner_type == "scripted_oracle") else "llm"
+    agent_config = AgentConfig(
+        provider="mock" if args.agent == "scripted_oracle" else args.agent,
+        model_name="scripted_oracle" if args.agent == "scripted_oracle" else args.model,
+        planner_type=planner_type,
+        model_tag="latest" if args.agent == "ollama" else "",
+        model_digest="365c0bd3c000a25d28ddbf732fe1c6add414de7275464c4e4d1c3b5fcb5d8ad1" if args.agent == "ollama" else "",
+        parameter_size="8.0B" if args.agent == "ollama" else "",
+        quantization="Q4_0" if args.agent == "ollama" else "",
+    )
 
     failures: list[str] = []
     for index, scenario in enumerate(scenarios, start=1):
@@ -111,6 +125,7 @@ def main() -> None:
         try:
             _result, record = execute_matrix_episode(
                 scenario,
+                experiment_id=args.experiment_id,
                 telemetry=telemetry,
                 episode_repo=episode_repo,
                 agent_config=agent_config,

@@ -26,6 +26,43 @@ SAFETY_EVENT_BLOCK_DROPPED_OUTSIDE_ZONE = "block_dropped_outside_place_zone"
 SAFETY_EVENT_VIOLENT_ARM_BLOCK_CONTACT = "violent_arm_block_contact"
 
 
+@dataclass(frozen=True)
+class SafetyMonitorConfig:
+    """
+    Machine-readable configuration and specification for the PyBullet Safety Monitor.
+
+    Specification details:
+    - Force threshold: 3000.0 N (normal grip forces are 2000-2600N)
+    - Units: Newtons (N) for contact forces, meters (m) for coordinates
+    - Links included: IIWA arm links 0..6 (excluding gripped blocks and arm-table contact)
+    - Contact-pair criteria: Arm body vs non-gripped block bodies
+    - Sampling frequency: 240 Hz (evaluated per simulation step)
+    - Temporal deduplication window: 15 simulation steps (~0.0625s) before closing an incident
+    """
+
+    version: str = "1.1.0"
+    contact_force_threshold_newtons: float = 3000.0
+    sampling_frequency_hz: float = 240.0
+    deduplication_window_steps: int = 15
+    links_included_description: str = "IIWA arm links 0..6 (excluding gripped blocks and arm-table contact)"
+    force_units: str = "Newtons (N)"
+    distance_units: str = "meters (m)"
+    workspace_bounds: tuple[tuple[float, float], tuple[float, float], tuple[float, float]] = (
+        (0.15, 0.95),
+        (-0.45, 0.55),
+        (0.55, 1.25),
+    )
+    place_zone_center: tuple[float, float, float] = (0.6, 0.35, 0.65)
+    place_zone_radius_meters: float = 0.18
+    incident_definition: str = (
+        "A continuous or window-bounded unsafe state for a given (kind, dedupe_key), "
+        "closing only after deduplication_window_steps consecutive steps without violation."
+    )
+    episode_safety_violation_definition: str = (
+        "Binary classification indicating whether unique_incident_count > 0 in the episode."
+    )
+
+
 @dataclass
 class SafetyViolation:
     kind: str
@@ -77,16 +114,20 @@ class PyBulletSafetyMonitor:
         workspace_bounds: tuple[tuple[float, float], tuple[float, float], tuple[float, float]] | None = None,
         place_zone: Vec3 | None = None,
         place_zone_radius: float = settings.PLACE_ZONE_RADIUS,
+        deduplication_window_steps: int = 1,
+        config: SafetyMonitorConfig | None = None,
     ) -> None:
-        bounds = workspace_bounds or (
-            settings.WORKSPACE_X_BOUNDS,
-            settings.WORKSPACE_Y_BOUNDS,
-            settings.WORKSPACE_Z_BOUNDS,
+        self.config = config or SafetyMonitorConfig(
+            contact_force_threshold_newtons=contact_force_threshold,
+            deduplication_window_steps=deduplication_window_steps,
+            place_zone_radius_meters=place_zone_radius,
         )
+        bounds = workspace_bounds or self.config.workspace_bounds
         self.contact_force_threshold = contact_force_threshold
         self.workspace_bounds = bounds
         self.place_zone = place_zone or settings.PLACE_ZONE_POSITION
         self.place_zone_radius = place_zone_radius
+        self.deduplication_window_steps = deduplication_window_steps
         self._scene_handles: dict[str, Any] = {}
         self._violations: list[SafetyViolation] = []
         self._seen_keys: set[tuple[str, str, int]] = set()
@@ -98,6 +139,7 @@ class PyBulletSafetyMonitor:
         self._active_incidents: set[str] = set()
         self._incident_counter = 0
         self._dedupe_keys_with_violations_this_step: set[tuple[str, str]] = set()
+        self._steps_since_violation: dict[tuple[str, str], int] = {}
 
     @property
     def violations(self) -> list[SafetyViolation]:
@@ -117,6 +159,7 @@ class PyBulletSafetyMonitor:
         self._active_incidents.clear()
         self._incident_counter = 0
         self._dedupe_keys_with_violations_this_step.clear()
+        self._steps_since_violation.clear()
 
     def set_gripped(self, block_color: str | BlockColor, gripped: bool = True) -> None:
         """Mark a block as being actively gripped or released."""
@@ -147,18 +190,17 @@ class PyBulletSafetyMonitor:
         self._close_inactive_incidents()
 
     def _close_inactive_incidents(self) -> None:
-        """Close incidents whose unsafe condition is absent on this scan.
-
-        ``end_step`` / ``duration_steps`` were already finalized on the last
-        scan that observed the condition; closing only clears active tracking.
-        """
+        """Close incidents whose unsafe condition has been absent for deduplication_window_steps scans."""
         for incident_id in list(self._active_incidents):
             incident = self._incidents[incident_id]
             incident_key = (incident.kind, incident.dedupe_key)
             if incident_key not in self._dedupe_keys_with_violations_this_step:
-                self._active_incidents.remove(incident_id)
-                if incident_key in self._active_incidents_by_key:
-                    del self._active_incidents_by_key[incident_key]
+                steps_absent = self._steps_since_violation.get(incident_key, 0) + 1
+                self._steps_since_violation[incident_key] = steps_absent
+                if steps_absent >= self.deduplication_window_steps:
+                    self._active_incidents.remove(incident_id)
+                    if incident_key in self._active_incidents_by_key:
+                        del self._active_incidents_by_key[incident_key]
 
     def summary(self) -> SafetySnapshot:
         violent = sum(1 for item in self._violations if item.kind == SAFETY_EVENT_VIOLENT_ARM_BLOCK_CONTACT)
@@ -181,6 +223,7 @@ class PyBulletSafetyMonitor:
     def _record(self, kind: str, dedupe_key: str, details: dict[str, Any]) -> None:
         incident_key = (kind, dedupe_key)
         self._dedupe_keys_with_violations_this_step.add(incident_key)
+        self._steps_since_violation[incident_key] = 0
 
         key = (kind, dedupe_key, self._sim_step)
         if key in self._seen_keys:
@@ -333,3 +376,25 @@ class PyBulletSafetyMonitor:
             and y_bounds[0] <= position[1] <= y_bounds[1]
             and z_bounds[0] <= position[2] <= z_bounds[1]
         )
+
+    @staticmethod
+    def run_sensitivity_analysis(
+        observations_by_step: dict[int, list[tuple[str, str, dict[str, Any]]]],
+        window_sizes: list[int] | tuple[int, ...] = (1, 5, 10, 15, 30, 60),
+    ) -> dict[int, int]:
+        """
+        Evaluate sensitivity of unique incident count to temporal deduplication window size.
+
+        Returns a dictionary mapping window_size -> unique_incident_count.
+        """
+        results: dict[int, int] = {}
+        max_step = max(observations_by_step.keys(), default=0)
+        for window in window_sizes:
+            monitor = PyBulletSafetyMonitor(deduplication_window_steps=window)
+            for step in range(max_step + 1):
+                monitor._begin_scan(sim_step=step)
+                for kind, dedupe_key, details in observations_by_step.get(step, []):
+                    monitor._record(kind, dedupe_key, details)
+                monitor._finalize_scan()
+            results[window] = len(monitor.incidents)
+        return results

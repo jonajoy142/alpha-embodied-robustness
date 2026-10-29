@@ -8,3 +8,7 @@ dist/
 results/
 .pytest_cache/
 .DS_Store
+.vscode/
+.idea/
+*.tex
+MANUSCRIPT_REVISION_REPORT.md

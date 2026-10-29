@@ -74,6 +74,10 @@ class ChaosRoboticsWrapper(SimulatorClient):
         self._safety_monitor = safety_monitor
         self._observation_lag_requested = 0.0
         self._observation_lag_observed = 0.0
+        self._observation_difference: float = 0.0
+        self._slip_evaluated: bool = False
+        self._slip_decision: bool | None = None
+        self._last_unreachable_offset_magnitude: float = 0.0
         self._last_observation_meta: dict[str, Any] = {}
         for spec in self.config.enabled_faults():
             if spec.fault_type == FaultType.SENSOR_LAG:
@@ -120,6 +124,23 @@ class ChaosRoboticsWrapper(SimulatorClient):
     def grip_handle(self) -> Any | None:
         return self._grip_handle
 
+    @property
+    def observation_difference(self) -> float:
+        """Maximum measured Euclidean position difference between fresh and delayed observations."""
+        return self._observation_difference
+
+    @property
+    def last_offset_magnitude(self) -> float:
+        return self._last_unreachable_offset_magnitude
+
+    def set_block_velocity(self, color: BlockColor, velocity: Vec3) -> None:
+        if hasattr(self._inner, "set_block_velocity"):
+            self._inner.set_block_velocity(color, velocity)
+
+    def set_block_position(self, color: BlockColor, pos: Vec3) -> None:
+        if hasattr(self._inner, "set_block_position"):
+            self._inner.set_block_position(color, pos)
+
     # ------------------------------------------------------------------
     # SimulatorClient delegation with physics/control hooks
     # ------------------------------------------------------------------
@@ -131,7 +152,10 @@ class ChaosRoboticsWrapper(SimulatorClient):
         self._inner.disconnect()
 
     def build_scene(self) -> dict[str, Any]:
-        return self._inner.build_scene()
+        result = self._inner.build_scene()
+        # Capture initial observation to seed history for F1 lag
+        self._capture_observation_sample()
+        return result
 
     def step(self, steps: int = 1) -> None:
         for _ in range(steps):
@@ -139,6 +163,11 @@ class ChaosRoboticsWrapper(SimulatorClient):
             self._context.elapsed_seconds += self.config.sim_timestep
             self._maybe_inject_grip_slip()
             self._inner.step(1)
+            # Sample observations more frequently to build better history for F1 lag
+            # Sample every 0.05s of sim time to provide granular history
+            sample_period = max(1, int(round(0.05 / max(self.config.sim_timestep, 1e-9))))
+            if self._context.sim_step_count % sample_period == 0:
+                self._capture_observation_sample()
 
     def get_block_state(self, color: BlockColor) -> BlockState:
         return self._inner.get_block_state(color)
@@ -153,17 +182,15 @@ class ChaosRoboticsWrapper(SimulatorClient):
 
         if hasattr(self._inner, "set_end_effector_target") and hasattr(self._inner, "end_effector_tracking_result"):
             self._inner.set_end_effector_target(executed, target_orn)
-            # Sample often enough that observed lag can approximate configured lag.
-            sample_period = max(1, int(round(0.05 / max(self.config.sim_timestep, 1e-9))))
+            # Observation sampling is now handled in step() method
             for step_idx in range(settings.MOVE_STEPS):
                 self.step(1)
-                if step_idx % sample_period == 0:
-                    self._capture_observation_sample()
             result = self._inner.end_effector_tracking_result(executed)
         else:
             result = self._inner.move_end_effector(executed, target_orn)
             self._context.sim_step_count += settings.MOVE_STEPS
             self._context.elapsed_seconds += settings.MOVE_STEPS * self.config.sim_timestep
+            # Capture sample here since we're not using step()
             self._capture_observation_sample()
 
         result["requested_target"] = requested
@@ -172,6 +199,8 @@ class ChaosRoboticsWrapper(SimulatorClient):
 
     def grip(self, color: BlockColor) -> Any:
         handle = self._inner.grip(color)
+        self._slip_evaluated = False
+        self._slip_decision = None
         if handle is not None:
             self._grip_handle = handle
             self._grip_active = True
@@ -251,27 +280,54 @@ class ChaosRoboticsWrapper(SimulatorClient):
         cutoff = timestamp - lag_seconds
         delayed = snapshot
         returned_timestamp = timestamp
-        # Newest sample at or before cutoff (meaningful stale observation).
-        for sample in reversed(self._observation_history[:-1]):
-            if sample.timestamp <= cutoff:
-                delayed = copy.deepcopy(sample.state)
-                returned_timestamp = sample.timestamp
-                break
-        else:
-            # Fall back to oldest sample if history is shorter than the lag window.
-            if len(self._observation_history) > 1:
-                oldest = self._observation_history[0]
-                delayed = copy.deepcopy(oldest.state)
-                returned_timestamp = oldest.timestamp
+        
+        # Find the sample closest to the cutoff timestamp
+        # This ensures we return an observation that is approximately lag_seconds old
+        best_sample = None
+        best_diff = float('inf')
+        
+        # Search through history excluding the current sample we just added
+        # Convert to list to enable slicing since deque doesn't support slicing
+        history_list = list(self._observation_history)
+        for sample in reversed(history_list[:-1]):
+            diff = abs(sample.timestamp - cutoff)
+            if diff < best_diff:
+                best_diff = diff
+                best_sample = sample
+        
+        # Use the best matching sample if found and history has sufficient samples
+        # Only apply lag if we have at least 2 samples (current + one historical)
+        if best_sample is not None and len(self._observation_history) >= 2:
+            delayed = copy.deepcopy(best_sample.state)
+            returned_timestamp = best_sample.timestamp
 
         observed_lag = max(0.0, timestamp - returned_timestamp)
+        applied_lag = observed_lag
         self._observation_lag_observed = max(self._observation_lag_observed, observed_lag)
+
+        # Calculate measurable difference between fresh and delayed observation
+        observation_diff = 0.0
+        fresh_blocks = snapshot.get("blocks", snapshot) if isinstance(snapshot, dict) else {}
+        delayed_blocks = delayed.get("blocks", delayed) if isinstance(delayed, dict) else {}
+        if isinstance(fresh_blocks, dict) and isinstance(delayed_blocks, dict):
+            for color_key, fresh_pos in fresh_blocks.items():
+                if color_key in delayed_blocks:
+                    del_pos = delayed_blocks[color_key]
+                    if (isinstance(fresh_pos, (list, tuple)) and isinstance(del_pos, (list, tuple))
+                            and len(fresh_pos) >= 3 and len(del_pos) >= 3):
+                        dist = sum((a - b) ** 2 for a, b in zip(fresh_pos[:3], del_pos[:3])) ** 0.5
+                        observation_diff = max(observation_diff, dist)
+
+        self._observation_difference = max(self._observation_difference, observation_diff)
+
         self._last_observation_meta = {
             "current_timestamp": timestamp,
             "returned_timestamp": returned_timestamp,
             "requested_lag": lag_seconds,
+            "applied_lag": applied_lag,
             "observed_lag": observed_lag,
             "stale": returned_timestamp < timestamp,
+            "observation_difference": observation_diff,
         }
 
         self._record_event(
@@ -279,8 +335,13 @@ class ChaosRoboticsWrapper(SimulatorClient):
             hook="wrap_observation",
             fault_applied=True,
             lag_seconds=lag_seconds,
+            requested_lag=lag_seconds,
+            applied_lag=applied_lag,
             returned_timestamp=returned_timestamp,
             observed_lag_seconds=observed_lag,
+            observation_timestamp=returned_timestamp,
+            environment_timestamp=timestamp,
+            observation_difference=observation_diff,
         )
         return delayed
 
@@ -323,21 +384,26 @@ class ChaosRoboticsWrapper(SimulatorClient):
         spec = specs[0]
         if not self._trigger_satisfied(spec):
             return
-        if not self._roll_probability(spec.probability):
-            self._record_event(
-                fault_type=FaultType.GRIP_SLIP,
-                hook="step",
-                fault_applied=False,
-                slip_probability=spec.intensity.slip_probability,
-            )
-            return
-        if not self._roll_probability(spec.intensity.slip_probability):
-            self._record_event(
-                fault_type=FaultType.GRIP_SLIP,
-                hook="step",
-                fault_applied=False,
-                slip_probability=spec.intensity.slip_probability,
-            )
+
+        # Evaluate slip roll once per grip rather than every simulation step (which guaranteed 100% slip)
+        if not self._slip_evaluated:
+            self._slip_evaluated = True
+            prob_satisfied = self._roll_probability(spec.probability)
+            slip_satisfied = self._roll_probability(spec.intensity.slip_probability)
+            self._slip_decision = prob_satisfied and slip_satisfied
+
+            if not self._slip_decision:
+                self._record_event(
+                    fault_type=FaultType.GRIP_SLIP,
+                    hook="step",
+                    fault_applied=False,
+                    slip_probability=spec.intensity.slip_probability,
+                    configured_slip_probability=spec.intensity.slip_probability,
+                    slip_triggered=False,
+                )
+                return
+
+        if not self._slip_decision:
             return
 
         handle = self._grip_handle
@@ -360,6 +426,8 @@ class ChaosRoboticsWrapper(SimulatorClient):
             constraint_id=handle,
             weaken_force_factor=weaken,
             constraint_removed=dropped,
+            configured_slip_probability=spec.intensity.slip_probability,
+            slip_triggered=True,
         )
 
     def _maybe_inject_unreachable_ik(self, target_pos: Vec3) -> Vec3:
@@ -372,6 +440,8 @@ class ChaosRoboticsWrapper(SimulatorClient):
             return target_pos
 
         offset = self._resolved_unreachable_offset(spec)
+        offset_magnitude = float(spec.intensity.offset_magnitude)
+        self._last_unreachable_offset_magnitude = offset_magnitude
         corrupted = (
             target_pos[0] + offset[0],
             target_pos[1] + offset[1],
@@ -384,6 +454,7 @@ class ChaosRoboticsWrapper(SimulatorClient):
             requested_target=target_pos,
             executed_target=corrupted,
             offset=offset,
+            offset_magnitude=offset_magnitude,
         )
         return corrupted
 

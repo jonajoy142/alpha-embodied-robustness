@@ -33,17 +33,20 @@ from alpha.services.experiment_matrix import (
     configure_pybullet_determinism,
     seed_deterministic_environment,
 )
+from alpha.services.oracle_planner import ScriptedOraclePlanner
 from alpha.services.scene_service import SceneService
 
+
+import hashlib
 
 def execute_matrix_episode(
     scenario: MatrixScenario,
     *,
-    experiment_id: str = "dev",
+    experiment_id: str,
     telemetry: ChaosTelemetryLogger,
-    episode_repo: EpisodeRepository,
+    episode_repo: EpisodeRepository | None = None,
     data_repo: ExperimentDataRepository | None = None,
-    agent_config: AgentConfig,
+    agent_config: AgentConfig | None = None,
     block: BlockColor = BlockColor.RED,
     llm_min_interval: float = 0.5,
     master_seed: int | None = None,
@@ -54,7 +57,8 @@ def execute_matrix_episode(
 ) -> tuple[Any | None, ExperimentTelemetryRecord]:
     """Run one matrix scenario through the canonical ``AgentService`` path."""
     seed_deterministic_environment(master_seed or scenario.master_seed)
-    episode_seed = (master_seed or scenario.master_seed) + (abs(hash(scenario.run_id)) % 10_000)
+    seed_offset = int(hashlib.sha256(scenario.run_id.encode("utf-8")).hexdigest()[:8], 16) % 10_000
+    episode_seed = (master_seed or scenario.master_seed) + seed_offset
 
     inner = PyBulletSimulatorClient()
     chaos_wrapper: ChaosRoboticsWrapper | None = None
@@ -91,15 +95,19 @@ def execute_matrix_episode(
     configure_pybullet_determinism()
     scene_service.build_and_settle(gui=False)
 
-    llm_client: LLMClient = RateLimitedLLMClient(
-        build_llm_client(agent_config),
-        min_interval_seconds=llm_min_interval,
-    )
-    llm_client = TelemetryLLMClient(llm_client, telemetry)
-    if chaos_wrapper is not None and _needs_planner_wrapper(scenario, chaos_config):
-        llm_client = ChaosPlannerLLMClient(llm_client, chaos_wrapper)
+    planner_type = getattr(agent_config, "planner_type", "llm")
+    if planner_type == "scripted_oracle":
+        brain = ScriptedOraclePlanner()
+    else:
+        llm_client: LLMClient = RateLimitedLLMClient(
+            build_llm_client(agent_config),
+            min_interval_seconds=llm_min_interval,
+        )
+        llm_client = TelemetryLLMClient(llm_client, telemetry)
+        if chaos_wrapper is not None and _needs_planner_wrapper(scenario, chaos_config):
+            llm_client = ChaosPlannerLLMClient(llm_client, chaos_wrapper)
+        brain = AgentBrain(llm_client)
 
-    brain = AgentBrain(llm_client)
     control_service = ControlService(instrumented)
     agent_service = AgentService(brain, control_service, instrumented)
 
@@ -123,8 +131,14 @@ def execute_matrix_episode(
         injected_fault_type=injected_fault,
         fault_intensity=scenario.intensity_value,
         seed=episode_seed,
-        model_identifier=model_identifier or agent_config.model_name,
+        model_identifier=model_identifier or (brain.name if planner_type == "scripted_oracle" else agent_config.model_name),
         fault_trigger=fault_trigger,
+        planner_type=planner_type,
+        model_name=getattr(agent_config, "model_name", brain.name),
+        model_tag=getattr(agent_config, "model_tag", ""),
+        model_digest=getattr(agent_config, "model_digest", ""),
+        config_version="1.0.0",
+        safety_monitor_version=safety_monitor.config.version,
     )
 
     replan_limit = (
@@ -151,10 +165,26 @@ def execute_matrix_episode(
         crashed = True
         failure_reason = _format_exception_failure(exc)
     finally:
+        final_dist = None
+        obs_diff = None
         if chaos_wrapper is not None:
             telemetry.ingest_fault_events(chaos_wrapper.event_log())
             requested_lag, observed_lag = chaos_wrapper.observation_lag_metrics()
-            telemetry.record_observation_lag(requested_lag=requested_lag, observed_lag=observed_lag)
+            obs_diff = chaos_wrapper.observation_difference
+            telemetry.record_observation_lag(
+                requested_lag=requested_lag,
+                observed_lag=observed_lag,
+                observation_difference=obs_diff,
+            )
+        try:
+            states = scene_service.block_states()
+            if block.value in states:
+                pos = states[block.value].position
+                pz = settings.PLACE_ZONE_POSITION
+                final_dist = ((pos[0] - pz[0]) ** 2 + (pos[1] - pz[1]) ** 2 + (pos[2] - pz[2]) ** 2) ** 0.5
+        except Exception:
+            pass
+
         if result is not None and result.notes == REPLANNING_TIMEOUT_REASON:
             timed_out = True
             failure_reason = REPLANNING_TIMEOUT_REASON
@@ -166,6 +196,8 @@ def execute_matrix_episode(
             timed_out=timed_out,
             episode_result=result,
             failure_reason=failure_reason,
+            final_block_target_distance=final_dist,
+            observation_difference=obs_diff,
         )
         if result is not None:
             episode_repo.save(result)

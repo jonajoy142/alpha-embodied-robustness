@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 from pydantic import ValidationError
@@ -136,6 +137,11 @@ class AgentService:
         observation_count = 0
         chunk_index = 0
         timed_out = False
+        episode_start_time = time.monotonic()
+        # Track task state for replanning context
+        task_phase = "pick"  # Initial phase: picking up the block
+        block_gripped = False
+        place_moves_completed = 0
         # Hard ceiling: initial plan drain + one chunk cycle per allowed replan.
         max_chunks = max_replanning_attempts + 1 if enable_replanning else 1
         if enable_replanning:
@@ -143,6 +149,31 @@ class AgentService:
             max_chunks = (max_replanning_attempts + 1) * 2
 
         while current_plan:
+            # Check wall-time timeout to prevent indefinite hangs
+            elapsed_wall_time = time.monotonic() - episode_start_time
+            if elapsed_wall_time > AgentConfig.max_episode_wall_seconds:
+                timed_out = True
+                logger.warning(
+                    "Episode terminating: wall-time timeout exceeded "
+                    "(elapsed=%s max=%s chunk_index=%s replan_count=%s steps=%s)",
+                    elapsed_wall_time,
+                    AgentConfig.max_episode_wall_seconds,
+                    chunk_index,
+                    replan_count,
+                    total_steps_taken,
+                )
+                execution_log.append(
+                    {
+                        "wall_time_timeout": True,
+                        "reason": "episode_wall_time_timeout",
+                        "elapsed_seconds": elapsed_wall_time,
+                        "chunk_index": chunk_index,
+                        "replan_count": replan_count,
+                        "at_step": total_steps_taken,
+                    }
+                )
+                break
+
             if enable_replanning and chunk_index >= max_chunks:
                 timed_out = True
                 logger.warning(
@@ -187,6 +218,8 @@ class AgentService:
 
                 if step.action == ActionType.MOVE_TO:
                     assert step.target is not None
+                    if block_gripped:
+                        place_moves_completed += 1
                     move_result = self.control_service.move_to(step.target)
                     execution_log.append(
                         {
@@ -201,16 +234,21 @@ class AgentService:
                 elif step.action == ActionType.GRIP:
                     assert step.block is not None
                     grip_handle = self.control_service.grip(step.block)
+                    block_gripped = grip_handle is not None
+                    if block_gripped:
+                        task_phase = "place"  # Transition to placement phase after successful grip
                     execution_log.append(
                         {
                             "index": total_steps_taken + index,
                             "action": step.action.value,
                             "block": step.block.value,
-                            "grip_acquired": grip_handle is not None,
+                            "grip_acquired": block_gripped,
                         }
                     )
                 elif step.action == ActionType.RELEASE:
                     self.control_service.release(grip_handle)
+                    block_gripped = False
+                    task_phase = "complete"  # Task complete after release
                     execution_log.append({"index": total_steps_taken + index, "action": step.action.value})
 
                 if hooks is not None and hooks.on_after_action is not None:
@@ -218,6 +256,11 @@ class AgentService:
 
             total_steps_taken += len(chunk)
             chunk_index += 1
+
+            if task_phase == "complete":
+                logger.info("Task completed (RELEASE executed); terminating execution loop.")
+                current_plan = []
+                break
 
             # Re-observe and optionally replan if more actions remain.
             # A successful replan replaces the remaining suffix with a fresh plan;
@@ -264,24 +307,98 @@ class AgentService:
                     list((fresh_observation.get("blocks") or {}).keys()),
                 )
                 try:
-                    new_plan = self.plan_task(task, fresh_observation)
+                    # Pass task state context to preserve progress during replanning
+                    scene_info_with_context = dict(fresh_observation)
+                    scene_info_with_context["task_phase"] = task_phase
+                    scene_info_with_context["block_gripped"] = block_gripped
+                    scene_info_with_context["completed_steps"] = total_steps_taken
+                    scene_info_with_context["remaining_actions"] = len(current_plan)
+                    
+                    # Add explicit completed actions summary to guide replanning
+                    completed_actions_summary = []
+                    if execution_log:
+                        for action_entry in execution_log:
+                            if "action" in action_entry:
+                                completed_actions_summary.append(action_entry["action"])
+                    
+                    scene_info_with_context["completed_actions"] = completed_actions_summary
+                    scene_info_with_context["completed_actions_count"] = len(completed_actions_summary)
+                    
+                    # Modify task description based on current progress to guide replanning
+                    # The key insight: ask the LLM to continue from where we left off
+                    replan_task = task
+                    if task_phase == "place" and block_gripped:
+                        # If we've gripped the block, ask planner to complete placement
+                        from alpha.core.entities import TaskSpec
+                        replan_task = TaskSpec(
+                            block=task.block,
+                            place_zone=task.place_zone,
+                            description="continue: place the gripped block in the place zone - block is already gripped, move to place zone and release"
+                        )
+                    elif task_phase == "pick" and not block_gripped:
+                        # Count how many MOVE_TOs we've done
+                        move_to_count = completed_actions_summary.count("MOVE_TO")
+                        if move_to_count >= 2:
+                            # We've done enough positioning, now ask for GRIP
+                            from alpha.core.entities import TaskSpec
+                            replan_task = TaskSpec(
+                                block=task.block,
+                                place_zone=task.place_zone,
+                                description="continue: grip the red block - you have already positioned the arm, now grip the block"
+                            )
+                        else:
+                            # Still need to position
+                            from alpha.core.entities import TaskSpec
+                            actions_str = ", ".join(completed_actions_summary[-3:]) if completed_actions_summary else "none"
+                            replan_task = TaskSpec(
+                                block=task.block,
+                                place_zone=task.place_zone,
+                                description=f"continue: position arm to grip the red block - already completed: {actions_str}"
+                            )
+                    
+                    new_plan = self.plan_task(replan_task, scene_info_with_context)
                     logger.info(
-                        "F1 LLM replan call returned: replan_index=%s new_actions=%s",
+                        "F1 LLM replan call returned: replan_index=%s new_actions=%s task_phase=%s block_gripped=%s completed=%s",
                         replan_count + 1,
                         len(new_plan.actions),
+                        task_phase,
+                        block_gripped,
+                        len(completed_actions_summary),
                     )
                     if new_plan.actions:
-                        replan_count += 1
-                        current_plan = list(new_plan.actions)
-                        execution_log.append(
-                            {
-                                "replanning": True,
-                                "at_step": total_steps_taken,
-                                "replan_count": replan_count,
-                                "chunk_index": chunk_index,
-                                "remaining_actions": len(current_plan),
-                            }
-                        )
+                        continuation_actions = list(new_plan.actions)
+                        if block_gripped:
+                            # If block is already gripped, drop any redundant pick/grip actions
+                            grip_indices = [i for i, a in enumerate(continuation_actions) if a.action == ActionType.GRIP]
+                            if grip_indices:
+                                continuation_actions = continuation_actions[grip_indices[-1] + 1 :]
+                            continuation_actions = [a for a in continuation_actions if a.action != ActionType.GRIP]
+
+                            # If replan provided a full 2+ move place sequence, drop the already completed place moves
+                            move_count_in_plan = sum(1 for a in continuation_actions if a.action == ActionType.MOVE_TO)
+                            if move_count_in_plan >= 2 and place_moves_completed > 0:
+                                moves_to_drop = min(place_moves_completed, move_count_in_plan)
+                                dropped = 0
+                                filtered = []
+                                for a in continuation_actions:
+                                    if a.action == ActionType.MOVE_TO and dropped < moves_to_drop:
+                                        dropped += 1
+                                    else:
+                                        filtered.append(a)
+                                continuation_actions = filtered
+
+                        if continuation_actions:
+                            replan_count += 1
+                            current_plan = continuation_actions
+                            execution_log.append(
+                                {
+                                    "replanning": True,
+                                    "at_step": total_steps_taken,
+                                    "replan_count": replan_count,
+                                    "chunk_index": chunk_index,
+                                    "remaining_actions": len(current_plan),
+                                }
+                            )
                         if hooks is not None and hooks.on_replan is not None:
                             hooks.on_replan(
                                 replan_count,
@@ -342,6 +459,19 @@ class AgentService:
             fault_seed = None
         fault_occurred = any(event.get("fault_applied") for event in fault_log)
 
+        # Determine timeout reason for notes
+        timeout_reason = ""
+        if timed_out:
+            for entry in execution_log:
+                if entry.get("wall_time_timeout"):
+                    timeout_reason = "episode_wall_time_timeout"
+                    break
+                elif entry.get("replanning_timeout"):
+                    timeout_reason = REPLANNING_TIMEOUT_REASON
+                    break
+
+        elapsed_wall_time = time.monotonic() - episode_start_time
+
         return EpisodeResult(
             task=task,
             success=success,
@@ -359,10 +489,11 @@ class AgentService:
                     "observation_count": observation_count,
                     "chunk_index": chunk_index,
                     "timed_out": timed_out,
+                    "elapsed_wall_seconds": elapsed_wall_time,
                 },
                 default=str,
             ),
             fault_occurred=fault_occurred,
             fault_seed=fault_seed,
-            notes=REPLANNING_TIMEOUT_REASON if timed_out else "",
+            notes=timeout_reason,
         )

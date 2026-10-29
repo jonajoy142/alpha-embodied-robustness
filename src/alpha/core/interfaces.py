@@ -47,6 +47,14 @@ class SimulatorClient(ABC):
     def observe(self) -> dict[str, Any]:
         """Return current scene observation (block positions, etc.)."""
 
+    def set_block_velocity(self, color: BlockColor, velocity: Vec3) -> None:
+        """Set linear velocity for a block (optional dynamic scene support)."""
+        pass
+
+    def set_block_position(self, color: BlockColor, pos: Vec3) -> None:
+        """Set position for a block (optional dynamic scene support)."""
+        pass
+
 
 class AgentPlanner(ABC):
     """Contract for the Week 2 Brain.

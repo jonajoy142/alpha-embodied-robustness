@@ -13,13 +13,15 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from alpha.core.entities import FaultType
 
 
 class ExperimentTelemetryRecord(BaseModel):
     """One episode summary row for experiment analysis."""
+
+    model_config = ConfigDict(protected_namespaces=())
 
     experiment_id: str = ""
     episode_id: str
@@ -55,6 +57,19 @@ class ExperimentTelemetryRecord(BaseModel):
     total_violation_duration_steps: int = 0
     observation_lag_requested: float = 0.0
     observation_lag_observed: float = 0.0
+    observation_difference: float | None = None
+    final_block_target_distance: float | None = None
+    git_commit: str = ""
+    git_dirty: bool = False
+    config_version: str = ""
+    safety_monitor_version: str = ""
+    planner_type: str = "llm"
+    model_name: str = ""
+    model_tag: str = ""
+    model_digest: str = ""
+    attempt_id: str = ""
+    is_accepted: bool = True
+    rejection_reason: str = ""
     degradation_curve_json: str = ""
 
     def degradation_payload(self) -> dict[str, Any]:
@@ -74,12 +89,21 @@ class ExperimentTelemetryRecord(BaseModel):
             row["fault_classification_correct"] = ""
         if row.get("seed") is None:
             row["seed"] = ""
+        if row.get("observation_difference") is None:
+            row["observation_difference"] = ""
+        if row.get("final_block_target_distance") is None:
+            row["final_block_target_distance"] = ""
         return row
 
     @classmethod
     def from_csv_row(cls, row: dict[str, Any]) -> ExperimentTelemetryRecord:
         payload = dict(row)
-        for key in ("post_fault_completion_time_sim_steps", "post_fault_completion_time_wall_seconds"):
+        for key in (
+            "post_fault_completion_time_sim_steps",
+            "post_fault_completion_time_wall_seconds",
+            "observation_difference",
+            "final_block_target_distance",
+        ):
             if payload.get(key) in ("", None):
                 payload[key] = None
             else:
@@ -129,9 +153,20 @@ class ExperimentTelemetryRecord(BaseModel):
         payload["success"] = str(payload.get("success")).lower() in {"1", "true", "yes"}
         payload["crashed"] = str(payload.get("crashed")).lower() in {"1", "true", "yes"}
         payload["timed_out"] = str(payload.get("timed_out")).lower() in {"1", "true", "yes"}
+        payload["git_dirty"] = str(payload.get("git_dirty")).lower() in {"1", "true", "yes"}
+        payload["is_accepted"] = str(payload.get("is_accepted", "true")).lower() in {"1", "true", "yes"}
         payload.setdefault("experiment_id", "")
         payload.setdefault("failure_reason", "")
         payload.setdefault("fault_trigger", "")
         payload.setdefault("fault_duration", "")
         payload.setdefault("model_identifier", "")
+        payload.setdefault("git_commit", "")
+        payload.setdefault("config_version", "")
+        payload.setdefault("safety_monitor_version", "")
+        payload.setdefault("planner_type", "llm")
+        payload.setdefault("model_name", "")
+        payload.setdefault("model_tag", "")
+        payload.setdefault("model_digest", "")
+        payload.setdefault("attempt_id", "")
+        payload.setdefault("rejection_reason", "")
         return cls(**payload)

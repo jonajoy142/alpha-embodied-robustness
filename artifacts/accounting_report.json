@@ -1,0 +1,66 @@
+{
+  "total_attempts": 169,
+  "accepted_attempts": 70,
+  "rejected_attempts": 99,
+  "all_attempts_crash_rate": 0.5858,
+  "all_attempts_success_rate": 0.1183,
+  "accepted_crash_rate": 0.0,
+  "accepted_success_rate": 0.2857,
+  "rejection_reasons": {
+    "openai_runtime_error": 70,
+    "openai_quota_exceeded_429": 26,
+    "openai_zero_step_abort": 3
+  },
+  "by_agent": {
+    "openai": {
+      "total": 99,
+      "crashed": 96,
+      "success": 0,
+      "completed": 0,
+      "aborted": 3,
+      "crash_rate": 0.9697,
+      "success_rate": 0.0
+    },
+    "ollama": {
+      "total": 70,
+      "crashed": 0,
+      "success": 20,
+      "completed": 70,
+      "aborted": 0,
+      "crash_rate": 0.0,
+      "success_rate": 0.2857
+    }
+  },
+  "by_fault_accepted": {
+    "none": {
+      "total": 5,
+      "success": 5,
+      "crashed": 0,
+      "success_rate": 1.0
+    },
+    "sensor_lag": {
+      "total": 20,
+      "success": 15,
+      "crashed": 0,
+      "success_rate": 0.75
+    },
+    "grip_slip": {
+      "total": 15,
+      "success": 0,
+      "crashed": 0,
+      "success_rate": 0.0
+    },
+    "unreachable_ik": {
+      "total": 15,
+      "success": 0,
+      "crashed": 0,
+      "success_rate": 0.0
+    },
+    "planner_output_corruption": {
+      "total": 15,
+      "success": 0,
+      "crashed": 0,
+      "success_rate": 0.0
+    }
+  }
+}

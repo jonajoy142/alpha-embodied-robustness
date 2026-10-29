@@ -137,17 +137,17 @@ def configure_pybullet_determinism() -> None:
 
 
 def intensity_params_for_fault(fault_type: FaultType, label: IntensityLabel) -> FaultIntensity:
-    """Map qualitative intensity labels to fault-specific severity knobs."""
+    """Map qualitative intensity labels to calibrated fault-specific severity knobs."""
     scalar = INTENSITY_SCALAR[label]
     if fault_type == FaultType.SENSOR_LAG:
-        return FaultIntensity(lag_seconds=0.25 + 0.75 * scalar)
+        return FaultIntensity(lag_seconds=round(0.10 + 1.40 * scalar, 4))
     if fault_type == FaultType.GRIP_SLIP:
-        return FaultIntensity(slip_probability=min(0.99, 0.2 + 0.75 * scalar), weaken_force_factor=0.0)
+        return FaultIntensity(slip_probability=min(0.95, round(0.10 + 0.85 * scalar, 4)), weaken_force_factor=0.0)
     if fault_type == FaultType.UNREACHABLE_IK:
-        return FaultIntensity(offset_magnitude=0.08 + 0.32 * scalar, offset=(1.0, 0.0, 0.0))
+        return FaultIntensity(offset_magnitude=round(0.03 + 0.27 * scalar, 4), offset=(1.0, 0.0, 0.0))
     if fault_type == FaultType.PLANNER_OUTPUT_CORRUPTION:
         return FaultIntensity(
-            corruption_probability=min(1.0, 0.2 + 0.8 * scalar),
+            corruption_probability=min(1.0, round(0.20 + 0.80 * scalar, 4)),
             inject_malformed_chars=label != IntensityLabel.LOW,
         )
     return FaultIntensity()

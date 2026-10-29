@@ -22,7 +22,17 @@ from typing import Any
 from alpha.clients.safety_monitor import SafetySnapshot
 from alpha.config import settings
 from alpha.core.entities import EpisodeResult, FaultType
+import subprocess
 from alpha.schemas.telemetry import ExperimentTelemetryRecord
+
+
+def _get_git_info() -> tuple[str, bool]:
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
+        status = subprocess.check_output(["git", "status", "--porcelain"], text=True, stderr=subprocess.DEVNULL).strip()
+        return commit, len(status) > 0
+    except Exception:
+        return "unknown", False
 
 
 @dataclass
@@ -53,6 +63,19 @@ class _EpisodeState:
     total_violation_duration_steps: int = 0
     observation_lag_requested: float = 0.0
     observation_lag_observed: float = 0.0
+    observation_difference: float | None = None
+    final_block_target_distance: float | None = None
+    git_commit: str = ""
+    git_dirty: bool = False
+    config_version: str = "1.0.0"
+    safety_monitor_version: str = "1.1.0"
+    planner_type: str = "llm"
+    model_name: str = ""
+    model_tag: str = ""
+    model_digest: str = ""
+    attempt_id: str = ""
+    is_accepted: bool = True
+    rejection_reason: str = ""
     started_at_wall: float = field(default_factory=time.monotonic)
     fault_events: list[dict[str, Any]] = field(default_factory=list)
 
@@ -89,8 +112,16 @@ class ChaosTelemetryLogger:
         seed: int | None = None,
         fault_trigger: str = "",
         fault_duration: str = "",
+        planner_type: str = "llm",
+        model_name: str = "",
+        model_tag: str = "",
+        model_digest: str = "",
+        config_version: str = "1.0.0",
+        safety_monitor_version: str = "1.1.0",
+        attempt_id: str = "",
     ) -> str:
         episode = episode_id or f"ep-{uuid.uuid4().hex[:12]}"
+        git_commit, git_dirty = _get_git_info()
         self._state = _EpisodeState(
             experiment_id=experiment_id,
             episode_id=episode,
@@ -102,6 +133,15 @@ class ChaosTelemetryLogger:
             fault_intensity=fault_intensity,
             fault_trigger=fault_trigger,
             fault_duration=fault_duration,
+            git_commit=git_commit,
+            git_dirty=git_dirty,
+            config_version=config_version,
+            safety_monitor_version=safety_monitor_version,
+            planner_type=planner_type,
+            model_name=model_name or model_identifier,
+            model_tag=model_tag,
+            model_digest=model_digest,
+            attempt_id=attempt_id or episode,
         )
         return episode
 
@@ -145,11 +185,26 @@ class ChaosTelemetryLogger:
         if self._state is not None:
             self._state.agent_diagnosed_fault = diagnosed_fault.strip()
 
-    def record_observation_lag(self, *, requested_lag: float = 0.0, observed_lag: float = 0.0) -> None:
+    def record_observation_lag(self, *, requested_lag: float = 0.0, observed_lag: float = 0.0, observation_difference: float | None = None) -> None:
         if self._state is None:
             return
         self._state.observation_lag_requested = requested_lag
         self._state.observation_lag_observed = observed_lag
+        if observation_difference is not None:
+            self._state.observation_difference = observation_difference
+
+    def record_observation_difference(self, difference: float | None) -> None:
+        if self._state is not None:
+            self._state.observation_difference = difference
+
+    def record_final_block_target_distance(self, distance: float | None) -> None:
+        if self._state is not None:
+            self._state.final_block_target_distance = distance
+
+    def record_acceptance(self, is_accepted: bool, rejection_reason: str = "") -> None:
+        if self._state is not None:
+            self._state.is_accepted = is_accepted
+            self._state.rejection_reason = rejection_reason
 
     def update_safety(self, snapshot: SafetySnapshot) -> None:
         if self._state is None:
@@ -169,6 +224,10 @@ class ChaosTelemetryLogger:
         timed_out: bool = False,
         episode_result: EpisodeResult | None = None,
         failure_reason: str = "",
+        final_block_target_distance: float | None = None,
+        observation_difference: float | None = None,
+        is_accepted: bool | None = None,
+        rejection_reason: str | None = None,
         auto_save: bool = True,
     ) -> ExperimentTelemetryRecord:
         """
@@ -186,6 +245,15 @@ class ChaosTelemetryLogger:
 
         state = self._state
         total_wall = time.monotonic() - state.started_at_wall
+
+        if final_block_target_distance is not None:
+            state.final_block_target_distance = final_block_target_distance
+        if observation_difference is not None:
+            state.observation_difference = observation_difference
+        if is_accepted is not None:
+            state.is_accepted = is_accepted
+        if rejection_reason is not None:
+            state.rejection_reason = rejection_reason
 
         if episode_result is not None:
             state.agent_name = episode_result.agent_name or state.agent_name
@@ -253,6 +321,19 @@ class ChaosTelemetryLogger:
             total_violation_duration_steps=state.total_violation_duration_steps,
             observation_lag_requested=state.observation_lag_requested,
             observation_lag_observed=state.observation_lag_observed,
+            observation_difference=state.observation_difference,
+            final_block_target_distance=state.final_block_target_distance,
+            git_commit=state.git_commit,
+            git_dirty=state.git_dirty,
+            config_version=state.config_version,
+            safety_monitor_version=state.safety_monitor_version,
+            planner_type=state.planner_type,
+            model_name=state.model_name,
+            model_tag=state.model_tag,
+            model_digest=state.model_digest,
+            attempt_id=state.attempt_id,
+            is_accepted=state.is_accepted,
+            rejection_reason=state.rejection_reason,
             degradation_curve_json=json.dumps(degradation_payload),
         )
 

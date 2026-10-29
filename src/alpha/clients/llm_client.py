@@ -298,7 +298,8 @@ class OllamaActionPlanClient(LLMClient):
             "format": "json",
 
             "options": {
-                "temperature": 0,
+                "temperature": self.config.temperature,
+                "top_p": self.config.top_p,
             },
         }
 
@@ -408,6 +409,65 @@ def _build_robot_prompt(
         task.place_zone[1],
         task.place_zone[2] + settings.PLACE_RELEASE_HEIGHT_OFFSET,
     )
+
+    is_gripped = False
+    if scene_info and isinstance(scene_info, dict):
+        is_gripped = bool(scene_info.get("block_gripped", False)) or scene_info.get("task_phase") == "place"
+
+    if is_gripped:
+        return f"""
+You are the Brain for a robot pick-and-place task.
+The block is ALREADY GRIPPED in the gripper.
+Your job is to generate ONLY the remaining continuation actions to transfer and release the block into the place zone.
+Do NOT repeat MOVE_TO above block, grasp, or GRIP actions.
+
+Task:
+- block: {task.block.value}
+- place_zone: {task.place_zone}
+- description: {task.description}
+
+Scene information:
+{scene_info or {}}
+
+Use this remaining continuation sequence:
+1. Move above the place zone at {above_place}.
+2. Move to the release position at {release_position}.
+3. Release the block.
+
+Allowed actions ONLY:
+1. MOVE_TO
+   Required field:
+   target: [x, y, z]
+
+2. RELEASE
+   No additional fields.
+
+Return ONLY a JSON object with this structure:
+
+{{
+  "agent_name": "{agent_name}",
+  "actions": [
+    {{
+      "action": "MOVE_TO",
+      "target": {list(above_place)}
+    }},
+    {{
+      "action": "MOVE_TO",
+      "target": {list(release_position)}
+    }},
+    {{
+      "action": "RELEASE"
+    }}
+  ]
+}}
+
+Rules:
+- Do not output Python or Markdown.
+- Do not explain your reasoning.
+- Do not repeat GRIP or pick actions.
+- Only use MOVE_TO and RELEASE.
+- The final action must be RELEASE.
+""".strip()
 
     return f"""
 You are the Brain for a robot pick-and-place task.

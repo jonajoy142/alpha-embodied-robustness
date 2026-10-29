@@ -115,6 +115,26 @@ def parse_args() -> argparse.Namespace:
         help="Base URL for local Ollama when --provider ollama.",
     )
 
+    parser.add_argument(
+        "--enable-replanning",
+        action="store_true",
+        help="Enable replanning for F1 sensor lag tests.",
+    )
+
+    parser.add_argument(
+        "--replanning-chunk-size",
+        type=int,
+        default=4,
+        help="Chunk size for replanning (default: 4).",
+    )
+
+    parser.add_argument(
+        "--max-replanning-attempts",
+        type=int,
+        default=5,
+        help="Maximum replanning attempts (default: 5).",
+    )
+
     return parser.parse_args()
 
 
@@ -206,17 +226,54 @@ def print_result(
     print("--- SIMULATION ---")
 
     print(f"total_sim_steps:     {getattr(record, 'total_sim_steps', 0)}")
+    print(f"total_wall_seconds:  {getattr(record, 'total_wall_seconds', 0)}")
 
     success = result.success if result is not None else None
 
     print(f"success:             {success}")
     print(f"crashed:             {record.crashed}")
+    print(f"timed_out:           {record.timed_out}")
     print(f"failure_reason:      {record.failure_reason}")
 
     print()
     print("--- CHAOS ---")
 
     print(f"fault_occurred:      {record.fault_occurred}")
+    print(f"observation_lag_requested: {getattr(record, 'observation_lag_requested', 0)}")
+    print(f"observation_lag_observed:   {getattr(record, 'observation_lag_observed', 0)}")
+
+    print()
+    print("--- REPLANNING ---")
+
+    print(f"replan_count:        {getattr(record, 'replan_count', 0)}")
+    print(f"observation_count:   {getattr(record, 'observation_count', 0)}")
+    print(f"actions_executed:    {getattr(result, 'steps_taken', 0) if result else 0}")
+
+    print()
+    print("--- TASK PROGRESS ---")
+
+    # Check if task progressed toward placement by examining execution log
+    task_progressed = False
+    if result and result.execution_log_json:
+        import json
+        try:
+            exec_log = json.loads(result.execution_log_json)
+            actions = exec_log.get("actions", [])
+            # Check if we have GRIP followed by MOVE_TO actions (indicating pick then place)
+            has_grip = any(action.get("action") == "GRIP" for action in actions)
+            has_move_after_grip = False
+            grip_found = False
+            for action in actions:
+                if action.get("action") == "GRIP" and action.get("grip_acquired"):
+                    grip_found = True
+                elif grip_found and action.get("action") == "MOVE_TO":
+                    has_move_after_grip = True
+                    break
+            task_progressed = has_grip and has_move_after_grip
+        except:
+            pass
+    
+    print(f"task_progressed:     {task_progressed}")
 
     print()
     print("--- SAFETY ---")
@@ -343,6 +400,9 @@ def main() -> int:
             llm_min_interval=0.5,
             master_seed=42,
             model_identifier=model,
+            enable_replanning=args.enable_replanning,
+            replanning_chunk_size=args.replanning_chunk_size,
+            max_replanning_attempts=args.max_replanning_attempts,
         )
 
     except Exception as exc:

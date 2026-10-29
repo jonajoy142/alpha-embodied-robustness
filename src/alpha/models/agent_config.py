@@ -31,3 +31,18 @@ class AgentConfig:
 
     # Episode-level wall-clock budget for all LLM calls combined (seconds).
     max_episode_llm_wall_seconds: float = 180.0
+
+    # Planner type: 'llm' or 'scripted_oracle'
+    planner_type: str = "llm"
+
+    # Exact model configuration metadata
+    model_tag: str = "latest"
+    model_digest: str = ""
+    parameter_size: str = ""
+    quantization: str = ""
+    temperature: float = 0.0
+    top_p: float = 0.9
+    context_length: int = 8192
+
+    # Episode-level wall-clock budget for entire episode including simulation (seconds).
+    max_episode_wall_seconds: float = 600.0

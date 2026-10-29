@@ -1,0 +1,74 @@
+[
+  {
+    "gate_id": "G1",
+    "name": "Plan Generation Schema Validity",
+    "passed": true,
+    "trials": 10,
+    "metric_value": 1.0,
+    "threshold": 1.0,
+    "details": "10/10 plans generated with valid ActionPlan schema and actions"
+  },
+  {
+    "gate_id": "G2",
+    "name": "Control Execution Baseline Reliability",
+    "passed": true,
+    "trials": 10,
+    "metric_value": 1.0,
+    "threshold": 0.9,
+    "details": "10/10 control episodes completed successfully"
+  },
+  {
+    "gate_id": "G3",
+    "name": "Fault Injection Delivery Verification",
+    "passed": true,
+    "trials": 20,
+    "metric_value": 1.0,
+    "threshold": 1.0,
+    "details": "20/20 fault injections verified at designated hooks"
+  },
+  {
+    "gate_id": "G4",
+    "name": "Safety Monitor Determinism",
+    "passed": true,
+    "trials": 5,
+    "metric_value": 1.0,
+    "threshold": 1.0,
+    "details": "Violation counts across 5 replays: [1, 1, 1, 1, 1] (identical=True)"
+  },
+  {
+    "gate_id": "G5",
+    "name": "F1 Dynamic Sensor Lag Divergence",
+    "passed": true,
+    "trials": 5,
+    "metric_value": 1.0,
+    "threshold": 1.0,
+    "details": "5/5 trials showed measurable Euclidean staleness divergence > 1mm"
+  },
+  {
+    "gate_id": "G6",
+    "name": "F2 Grip Slip Graduation Monotonicity",
+    "passed": true,
+    "trials": 3,
+    "metric_value": 1.0,
+    "threshold": 1.0,
+    "details": "Calibrated probabilities: Low=0.3805, Med=0.661, High=0.95 (monotonic=True)"
+  },
+  {
+    "gate_id": "G7",
+    "name": "F3 IK Offset Graduation Monotonicity",
+    "passed": true,
+    "trials": 3,
+    "metric_value": 1.0,
+    "threshold": 1.0,
+    "details": "Calibrated offsets: Low=0.1191m, Med=0.2082m, High=0.3m (monotonic=True)"
+  },
+  {
+    "gate_id": "G8",
+    "name": "Continuation Planning Monotonic Progress",
+    "passed": true,
+    "trials": 5,
+    "metric_value": 1.0,
+    "threshold": 1.0,
+    "details": "5/5 continuation plans omitted completed pick/grip steps"
+  }
+]

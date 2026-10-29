@@ -49,6 +49,7 @@ class PyBulletSimulatorClient(SimulatorClient):
             p.setCollisionFilterPair(self._arm_id, self._table_id, link_index, -1, enableCollision=0)
 
         self._block_ids = {}
+        self._block_velocities: dict[BlockColor, Vec3] = {}
         for color, pos in settings.BLOCK_SPAWN_POSITIONS.items():
             block_id = p.loadURDF(settings.BLOCK_URDF, basePosition=pos, globalScaling=1.2)
             p.changeVisualShape(block_id, -1, rgbaColor=settings.BLOCK_RGBA[color])
@@ -64,8 +65,22 @@ class PyBulletSimulatorClient(SimulatorClient):
             "end_effector_link": self._end_effector_link,
         }
 
+    def set_block_velocity(self, color: BlockColor, velocity: Vec3) -> None:
+        self._block_velocities[color] = velocity
+        if color in self._block_ids and self._connected:
+            p.resetBaseVelocity(self._block_ids[color], linearVelocity=list(velocity))
+
+    def set_block_position(self, color: BlockColor, pos: Vec3) -> None:
+        if color in self._block_ids and self._connected:
+            _, orn = p.getBasePositionAndOrientation(self._block_ids[color])
+            p.resetBasePositionAndOrientation(self._block_ids[color], list(pos), orn)
+
     def step(self, steps: int = 1) -> None:
         for _ in range(steps):
+            if hasattr(self, "_block_velocities"):
+                for color, vel in self._block_velocities.items():
+                    if color in self._block_ids and self._connected:
+                        p.resetBaseVelocity(self._block_ids[color], linearVelocity=list(vel))
             p.stepSimulation()
 
     def get_block_state(self, color: BlockColor) -> BlockState:
