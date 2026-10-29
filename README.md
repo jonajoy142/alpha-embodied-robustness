@@ -83,8 +83,8 @@ Embodied artificial intelligence increasingly pairs probabilistic Large Language
 Requires **Python 3.10+** (Python 3.11 recommended):
 
 ```bash
-git clone https://github.com/jonajoy142/embodied-agent-chaos.git
-cd embodied-agent-chaos
+git clone https://github.com/jonajoy142/alpha-embodied-robustness.git
+cd alpha-embodied-robustness
 
 python3 -m venv venv
 source venv/bin/activate          # On Windows: venv\Scripts\activate
