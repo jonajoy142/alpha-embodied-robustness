@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from alpha.config import settings
-from alpha.core.entities import ActionType, BlockColor, TaskSpec, Vec3
+from alpha.core.entities import ActionType, BlockColor, TaskFamily, TaskSpec, Vec3
 from alpha.core.interfaces import AgentPlanner
 from alpha.schemas.action_plan import ActionPlan, ActionStep
 
@@ -65,6 +65,32 @@ class ScriptedOraclePlanner(AgentPlanner):
 
         if is_gripped:
             # Continuation: block already in hand -> transfer to place zone and release
+            actions.append(ActionStep(action=ActionType.MOVE_TO, target=above_place))
+            actions.append(ActionStep(action=ActionType.MOVE_TO, target=release_pos))
+            actions.append(ActionStep(action=ActionType.RELEASE))
+        elif task.task_family == TaskFamily.CONSTRAINED_MULTI_BLOCK and task.secondary_block:
+            # Multi-block: clear obstacle block first to clearance zone, then place target block
+            sec_pos = self._extract_block_position(task.secondary_block, scene_info)
+            clear_pos = task.clearance_zone or (0.4, -0.3, 0.65)
+            above_sec: Vec3 = (sec_pos[0], sec_pos[1], max(sec_pos[2] + 0.175, 0.83))
+            grasp_sec: Vec3 = (sec_pos[0], sec_pos[1], max(sec_pos[2] + 0.045, 0.70))
+            above_clear: Vec3 = (clear_pos[0], clear_pos[1], clear_pos[2] + 0.15)
+            release_clear: Vec3 = (clear_pos[0], clear_pos[1], clear_pos[2] + settings.PLACE_RELEASE_HEIGHT_OFFSET)
+
+            # Step 1: Pick and clear obstacle
+            actions.append(ActionStep(action=ActionType.MOVE_TO, target=above_sec))
+            actions.append(ActionStep(action=ActionType.MOVE_TO, target=grasp_sec))
+            actions.append(ActionStep(action=ActionType.GRIP, block=task.secondary_block))
+            actions.append(ActionStep(action=ActionType.MOVE_TO, target=above_sec))
+            actions.append(ActionStep(action=ActionType.MOVE_TO, target=above_clear))
+            actions.append(ActionStep(action=ActionType.MOVE_TO, target=release_clear))
+            actions.append(ActionStep(action=ActionType.RELEASE))
+
+            # Step 2: Pick and place target block
+            actions.append(ActionStep(action=ActionType.MOVE_TO, target=above_block))
+            actions.append(ActionStep(action=ActionType.MOVE_TO, target=grasp_pos))
+            actions.append(ActionStep(action=ActionType.GRIP, block=task.block))
+            actions.append(ActionStep(action=ActionType.MOVE_TO, target=above_block))
             actions.append(ActionStep(action=ActionType.MOVE_TO, target=above_place))
             actions.append(ActionStep(action=ActionType.MOVE_TO, target=release_pos))
             actions.append(ActionStep(action=ActionType.RELEASE))

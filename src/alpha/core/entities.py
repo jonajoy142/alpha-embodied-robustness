@@ -39,6 +39,11 @@ class BlockState:
     orientation: tuple[float, float, float, float]
 
 
+class TaskFamily(str, Enum):
+    SINGLE_PICK_PLACE = "single_pick_place"
+    CONSTRAINED_MULTI_BLOCK = "constrained_multi_block"
+
+
 @dataclass(frozen=True)
 class TaskSpec:
     """What the arm is being asked to do. In Week 1 this is hardcoded
@@ -47,6 +52,9 @@ class TaskSpec:
     block: BlockColor
     place_zone: Vec3
     description: str = "pick block and move it to the place zone"
+    task_family: TaskFamily = TaskFamily.SINGLE_PICK_PLACE
+    secondary_block: BlockColor | None = None
+    clearance_zone: Vec3 | None = None
 
 
 class FaultType(str, Enum):

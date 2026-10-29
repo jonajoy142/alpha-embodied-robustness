@@ -44,7 +44,7 @@ class AgentBrain(AgentPlanner):
 class AgentService:
     def __init__(
         self,
-        brain: AgentBrain,
+        brain: AgentBrain | AgentPlanner,
         control_service: ControlService,
         simulator: SimulatorClient,
     ) -> None:

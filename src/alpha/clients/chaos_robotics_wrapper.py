@@ -350,14 +350,30 @@ class ChaosRoboticsWrapper(SimulatorClient):
         Intercept raw LLM planner output before JSON/schema validation.
 
         Applies planner-output corruption faults by deleting critical keys or
-        injecting malformed characters.
+        injecting malformed characters according to calibrated corruption_probability.
         """
         specs = self._active_specs(FaultType.PLANNER_OUTPUT_CORRUPTION)
         if not specs:
             return raw_text
 
         spec = specs[0]
-        if not self._should_apply_spec(spec):
+        if not self._trigger_satisfied(spec):
+            return raw_text
+
+        # Properly roll the calibrated corruption probability
+        prob = (
+            spec.intensity.corruption_probability
+            if spec.intensity.corruption_probability is not None
+            else spec.probability
+        )
+        if not self._roll_probability(prob):
+            self._record_event(
+                fault_type=FaultType.PLANNER_OUTPUT_CORRUPTION,
+                hook="intercept_planner_output",
+                fault_applied=False,
+                corruption_probability=prob,
+                corrupted=False,
+            )
             return raw_text
 
         corrupted = self._corrupt_planner_text(raw_text, spec)
@@ -365,6 +381,8 @@ class ChaosRoboticsWrapper(SimulatorClient):
             fault_type=FaultType.PLANNER_OUTPUT_CORRUPTION,
             hook="intercept_planner_output",
             fault_applied=True,
+            corruption_probability=prob,
+            corrupted=True,
             keys_deleted=list(spec.intensity.keys_to_delete),
         )
         return corrupted

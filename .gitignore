@@ -11,4 +11,5 @@ results/
 .vscode/
 .idea/
 *.tex
+paper_v2/
 MANUSCRIPT_REVISION_REPORT.md

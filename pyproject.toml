@@ -21,6 +21,9 @@ agent = ["openai>=1.0"]                            # Optional real LLM provider;
 dashboard = ["streamlit>=1.35"]                     # Week 8
 analytics = ["pandas>=2.0", "matplotlib>=3.8"]      # Week 5 experiment analysis
 
+[project.scripts]
+alpha = "alpha.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

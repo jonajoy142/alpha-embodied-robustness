@@ -1,84 +1,20 @@
-# Alpha: Systematic Fault Injection and Robustness Evaluation for LLM-Driven Embodied Manipulation
+# Alpha: A Reusable Fault-Injection Framework for LLM-Driven Manipulation
 
 [![arXiv](https://img.shields.io/badge/arXiv-2610.30197-b31b1b.svg)](https://arxiv.org/abs/2610.30197)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests: 130 Passing](https://img.shields.io/badge/Tests-130%20Passing-brightgreen.svg)]()
+[![Tests: 138 Passing](https://img.shields.io/badge/Tests-138%20Passing-brightgreen.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Official code, experiment runners, telemetry datasets, and reproducibility pipeline for the preprint:  
+**Alpha** is an open, modular fault-injection and chaos-engineering test harness for embodied robotic agents. It systematically tests, benchmarks, and diagnoses failure modes in Large Language Model (LLM) planners and physical control stacks across four operational boundaries: **Perception**, **Actuation**, **Kinematics**, and **Planning**.
+
+Read the foundational paper:  
 **"Alpha: Systematic Fault Injection and Robustness Evaluation for LLM-Driven Embodied Manipulation"** ([arXiv:2610.30197](https://arxiv.org/abs/2610.30197)).
 
 ---
 
-## Overview
+## 5-Minute Quickstart
 
-Embodied artificial intelligence increasingly pairs probabilistic Large Language Model (LLM) reasoning with physical robotic execution stacks. However, standard benchmarks evaluate aggregate end-to-end task success in nominal, unperturbed environments, making it difficult to isolate whether failures originate from sensor lag, actuator dynamics, kinematic reach constraints, or prompt-to-JSON serialization errors.
-
-**Alpha** is a systematic chaos-engineering and fault-injection test harness for embodied robotic manipulation in PyBullet simulation. It introduces:
-1. **Calibrated Faults across Four Boundaries:** Perception (sensor lag), actuation (gripper slip), kinematics (unreachable IK targets), and planning (planner-output JSON corruption), plus concurrent fault conditions.
-2. **Matched Evaluation Methodology:** Pairs an LLM planner (`llama3:latest` via Ollama) against a deterministic Scripted Oracle planner evaluated under identical task seeds, workspace geometries, contact dynamics, and safety criteria across a balanced 150-episode matrix (75 episodes per planner).
-3. **Discard-Bias Transparency Audit:** Comprehensive accounting of all 169 historical pilot attempts to ensure zero post-hoc selective filtering.
-
-![Architecture Diagram](figures/fig1_architecture.png)
-
----
-
-## Key Experimental Findings
-
-* **Equivalent Physical Robustness:** Excluding planner-output corruption, performance across all physical and kinematic conditions (F1 lag, F2 slip, F3 unreachable IK) is **strictly identical**: **55.0% (33/60)** for both LLM and Oracle planners, yielding zero discordant pairs (paired McNemar $p = 1.00$).
-* **Isolated Serialization Vulnerability:** The overall performance gap across the full matrix (64.0% Oracle vs. 44.0% LLM, McNemar $p = 3.01 \times 10^{-4}$) is driven entirely by planner-output corruption (100% Oracle vs. 0% LLM). This proves the primary bottleneck lies in prompt-to-JSON serialization and schema validation, not intrinsic reasoning deficits.
-* **Empirical Monotonicity:** Task success monotonically degrades with calibrated fault intensity across grip slip ($p_{\text{slip}} \in [0.30, 0.70]$) and unreachable kinematic targets ($\Delta z \in [0.15, 0.35]\,\text{m}$).
-
----
-
-## Fault Taxonomy (The 4 Boundaries)
-
-| Fault Class | Boundary | Injection Hook | Calibrated Intensities | Target Failure Signature |
-| :--- | :--- | :--- | :--- | :--- |
-| **F1: Sensor Lag** | Perception | `wrap_observation()` | $\Delta t \in \{0.50, 0.75, 1.00\}\,\text{s}$ | Stale divergence, replan saturation |
-| **F2: Grip Slip** | Actuation | `step_simulation()` | $p \in \{0.30, 0.50, 0.70\}$ | Mid-transfer object drop |
-| **F3: Unreachable IK**| Kinematics | `move_end_effector()` | $\Delta z \in \{0.15, 0.25, 0.35\}\,\text{m}$ | Joint-limit violation, safety stop |
-| **F4: Output Corrupt**| Planning | `intercept_planner_output()` | $p \in \{0.20, 0.50, 0.80\}$ | Pydantic schema validation rejection |
-| **Concurrent** | Multi-Boundary| Combined hooks | e.g., F1 ($0.50\,\text{s}$) + F2 ($0.30$) | Dual-fault interaction signatures |
-
----
-
-## Repository Structure
-
-```
-├── artifacts/                  # Statistical summaries, accounting reports, and figure dumps
-│   ├── accounting_report.md    # Complete 169-attempt pilot audit breakdown
-│   ├── analysis_summary.json   # Machine-readable McNemar and degradation statistics
-│   └── comparison_table.md     # Side-by-side Oracle vs. LLM metrics table
-├── configs/                    # Simulation and experiment configuration files
-│   └── experiments/            # Calibrated intensity parameters and pilot YAMLs
-├── data/
-│   ├── experiments/            # Full 150-episode raw and processed telemetry dataset
-│   │   └── final_150_matrix/   # Combined JSONL episodes, CSV traces, and logs
-│   ├── processed/              # Spot-check and validation processed runs
-│   └── raw/                    # Raw JSONL episode telemetry
-├── figures/                    # High-resolution manuscript figures (PNG)
-├── scripts/                    # CLI tools for running, calibrating, and analyzing
-│   ├── calibrate_fault_intensities.py  # Empirically tunes fault intensity parameters
-│   ├── run_experiment_matrix.py       # Executes the balanced multi-arm matrix
-│   ├── analyze_experiments.py         # Computes McNemar tests, tables, and metrics
-│   ├── generate_manuscript_figures.py # Regenerates all paper figures (Figs 1–7)
-│   ├── run_pilot_gates.py             # Validates pre-flight qualification gates G1–G8
-│   └── run_spot_check.py              # Single-episode debugging and visualization CLI
-├── src/alpha/                  # Core package source
-│   ├── clients/                # Simulation client, chaos wrapper, safety monitor, LLM
-│   ├── core/                   # Domain entities and abstract interfaces
-│   ├── models/                 # Pydantic configuration and state models
-│   ├── schemas/                # Strict telemetry and action schemas
-│   └── services/               # Matrix runners, Oracle planner, accounting service
-└── tests/                      # 130 unit and integration tests (100% passing)
-```
-
----
-
-## Quickstart & Installation
-
-### 1. Clone & Set Up Environment
+### 1. Installation
 
 Requires **Python 3.10+** (Python 3.11 recommended):
 
@@ -93,91 +29,200 @@ pip install --upgrade pip
 pip install -e ".[dev]"
 ```
 
-### 2. Verify Installation
-
-Run the complete test suite (130 automated tests):
-
+Verify the installation with the automated test suite (138 tests):
 ```bash
 pytest
 ```
 
----
+### 2. Run Experiments via CLI
 
-## Reproducing Paper Results
-
-All findings, tables, and figures from the paper can be reproduced using the bundled scripts or the top-level `Makefile`.
-
-### One-Command Pipeline
-
+Execute a single episode under sensor lag:
 ```bash
-make all
+alpha run --agent scripted_oracle --fault sensor_lag
 ```
 
-This sequentially executes the calibration check, attempt accounting audit, unit tests, pilot qualification gates, and statistical analysis.
-
-### Step-by-Step Reproduction
-
-#### 1. Fault Intensity Calibration
-Validates monotonicity and non-triviality across fault parameters:
+Run with an LLM planner (requires local [Ollama](https://ollama.ai) with `llama3`):
 ```bash
-python scripts/calibrate_fault_intensities.py
-# or: make calibrate
+alpha run --agent ollama --fault grip_slip
 ```
 
-#### 2. Pilot Gate Verification (G1–G8)
-Validates safety monitoring, lag bounds, slip physics, IK clamps, and schema rejection:
+Run a constrained multi-block task with obstacle clearance:
 ```bash
-python scripts/run_pilot_gates.py
-# or: make gates
+alpha run --agent scripted_oracle --task-family constrained_multi_block
 ```
 
-#### 3. Attempt Accounting Audit
-Reproduces the complete 169-attempt historical audit:
+Run with validation-feedback self-correction mitigation:
 ```bash
-python -m alpha.services.attempt_accounting
-# or: make audit
+alpha run --agent scripted_oracle --fault planner_output_corruption --mitigation retry_with_feedback
 ```
 
-#### 4. Run the Experiment Matrix
-To run the full 150-episode matrix (or run sample episodes):
-```bash
-# Deterministic Scripted Oracle:
-python scripts/run_experiment_matrix.py --agent scripted_oracle --episodes-per-variation 5
+### 3. Generate Evaluation Report
 
-# LLM Planner (requires local Ollama with llama3):
-ollama run llama3:latest
-python scripts/run_experiment_matrix.py --agent ollama --episodes-per-variation 5
-```
-
-#### 5. Statistical Analysis & Paper Tables
-Computes exact paired McNemar contingency tables, success percentages, and metrics:
+Generate a standalone HTML report with per-layer failure attribution and TOST equivalence analysis:
 ```bash
-python scripts/analyze_experiments.py
-# or: make analyze
-```
-
-#### 6. Regenerate Manuscript Figures
-Regenerates Figures 1 through 7 in `figures/`:
-```bash
-python scripts/generate_manuscript_figures.py
+alpha report -o artifacts/experiment_report.html
 ```
 
 ---
 
-## Safety Monitoring Architecture
+## Architecture & Core Pipeline
 
-Alpha enforces active real-time safety bounds independent of planner output:
-* **Workspace Enclosure:** Clamps gripper positions to safe tabletop bounds:
-  $$\mathcal{W} = [0.15, 0.95] \times [-0.45, 0.55] \times [0.55, 1.25]\,\text{m}$$
-* **Kinematic Limits:** Detects joint-limit saturation and unreachable IK targets.
-* **Near-Miss & Collision Detection:** Triggers safety halts before physical collisions exceed safety thresholds ($d < 0.03\,\text{m}$, force thresholds).
-* **De-duplicated Telemetry:** Automatically debounces repeated safety events across simulation steps to prevent artificial metric inflation.
+Alpha enforces strict decoupling between high-level reasoning, serialization/validation, chaos injection middleware, and physics execution.
+
+```text
++------------------------------------------------------------------------+
+|                            PLANNER ADAPTER                             |
+|  - LLMPlannerAdapter (Ollama / OpenAI / Custom)                        |
+|  - OraclePlannerAdapter (Deterministic Scripted Baseline)              |
+|  - Mitigation: Retry with Error Feedback | Structured Decoding         |
++------------------------------------------------------------------------+
+                                   |
+                         [Raw JSON ActionPlan]
+                                   v
++------------------------------------------------------------------------+
+|                     CHAOS ROBOTICS MIDDLEWARE                          |
+|  - F1 (Perception):   wrap_observation()         -> Injects Lag        |
+|  - F2 (Actuation):    step_simulation()          -> Injects Slip       |
+|  - F3 (Kinematics):   move_end_effector()        -> Injects Target IK  |
+|  - F4 (Planning):     intercept_planner_output() -> Corrupts Schema    |
++------------------------------------------------------------------------+
+                                   |
+                        [Validated ActionPlan]
+                                   v
++------------------------------------------------------------------------+
+|                           SIMULATOR ADAPTER                            |
+|  - PyBulletSimulatorAdapter (KUKA LBR iiwa 7-DOF)                      |
+|  - Domain Randomization (Spawn jitter ±2cm, friction [0.3, 1.2])       |
+|  - Extensible to Isaac Sim / MuJoCo backends                           |
++------------------------------------------------------------------------+
+                                   |
+                                   v
++------------------------------------------------------------------------+
+|                     SAFETY MONITOR & TELEMETRY                         |
+|  - Real-time workspace boundary enforcement                            |
+|  - Collision & near-miss detection (force thresholds in Newtons)       |
+|  - Pre-registered TOST (Two One-Sided Tests) Equivalence Service       |
++------------------------------------------------------------------------+
+```
+
+---
+
+## Fault Taxonomy (The 4 Boundaries)
+
+| Fault Class | Operational Boundary | Injection Hook | Calibrated Intensities | Target Failure Signature |
+| :--- | :--- | :--- | :--- | :--- |
+| **F1: Sensor Lag** | Perception | `wrap_observation()` | $\Delta t \in \{0.50, 0.75, 1.00\}\,\text{s}$ | Stale divergence, replanning loops |
+| **F2: Grip Slip** | Actuation | `step_simulation()` | $p_{\text{slip}} \in \{0.30, 0.50, 0.70\}$ | Mid-transfer object drop |
+| **F3: Unreachable IK** | Kinematics | `move_end_effector()` | $\Delta x \in \{0.05, 0.12, 0.25\}\,\text{m}$ | Joint-limit saturation, kinematic stop |
+| **F4: Output Corruption**| Planning / Interface | `intercept_planner_output()` | $p_{\text{corrupt}} \in \{0.30, 0.50, 0.80\}$ | Pydantic schema validation rejection |
+| **Concurrent** | Multi-Boundary | Combined hooks | e.g. F1 ($0.50\,\text{s}$) + F2 ($0.30$) | Compound failure modes |
+
+---
+
+## Extensibility Guide
+
+Alpha is designed as a modular, extensible plugin framework. You can plug in custom planners, simulators, and fault classes in just a few lines of code.
+
+### 1. Adding a Custom Planner
+Subclass `PlannerAdapter` from `alpha.plugins`:
+
+```python
+from typing import Any
+from alpha.core.entities import TaskSpec
+from alpha.plugins import PlannerAdapter
+
+class MyCustomPlanner(PlannerAdapter):
+    def __init__(self, **kwargs):
+        super().__init__(name="my_custom_planner", **kwargs)
+
+    def generate_raw_plan_text(
+        self,
+        task: TaskSpec,
+        scene_info: dict[str, Any] | None = None,
+        feedback: str | None = None,
+    ) -> str:
+        # If feedback is provided, adapt prompt to correct previous schema failure
+        prompt = f"Plan pick-and-place for {task.block.value}."
+        if feedback:
+            prompt += f"\nPrevious error: {feedback}"
+        return '{"agent_name": "custom", "actions": [{"action": "MOVE_TO", "target": [0.5, 0.0, 0.7]}]}'
+```
+
+### 2. Adding a Custom Simulator Backend
+Subclass `SimulatorAdapter` from `alpha.plugins`:
+
+```python
+from alpha.plugins import SimulatorAdapter, SceneRandomizationConfig
+
+class IsaacSimAdapter(SimulatorAdapter):
+    def configure_scene_randomization(self, config: SceneRandomizationConfig) -> None:
+        self._config = config
+
+    def connect(self, gui: bool = False) -> None:
+        # Initialize custom physics engine
+        pass
+
+    def get_contact_forces(self) -> list[float]:
+        # Return contact normal forces in Newtons
+        return [0.0]
+```
+
+### 3. Adding a Custom Fault Plugin
+Subclass `FaultPlugin` and register with `FaultRegistry`:
+
+```python
+from typing import Any
+from alpha.core.entities import FaultType
+from alpha.plugins import FaultPlugin, FaultRegistry
+
+class TorqueNoiseFault(FaultPlugin):
+    @property
+    def fault_type(self) -> FaultType:
+        return FaultType.NONE  # Or custom enum
+
+    @property
+    def boundary(self) -> str:
+        return "Actuation"
+
+    def apply(self, target: Any, intensity: Any, rng: Any) -> Any:
+        noise = rng.gauss(0, intensity.magnitude)
+        return [t + noise for t in target]
+
+FaultRegistry.register("torque_noise", TorqueNoiseFault)
+```
+
+---
+
+## Mitigation Strategies
+
+Alpha includes built-in mitigation arms to benchmark recovery techniques against unmitigated baselines:
+
+1. **`none` (Unmitigated Baseline):** Raw planner output is validated. If schema validation fails (e.g. from F4 corruption), the episode terminates as a validation failure ($0\%$ completion).
+2. **`retry_with_feedback`:** When validation fails, the exact error (e.g. missing required field, JSON decode error) is formatted as feedback and passed back to the planner to re-generate the plan (up to $K=3$ attempts).
+3. **`structured_decoding`:** Syntactic and structural healing is applied to repair unclosed braces, truncated JSON, or enforce schema conformity before validation.
+
+---
+
+## Reproducibility & Rigor
+
+* **Matched Experimental Seeds:** Python, NumPy, and PyBullet physics are seeded deterministically per episode using SHA256 run-ID hashing.
+* **Pre-registered TOST Equivalence:** Includes Two One-Sided Tests (TOST) with a pre-registered equivalence margin ($\pm 15\%$) to verify equivalence between deterministic controllers and LLM planners on physical faults.
+* **Continuous Metrics:** Telemetry tracks continuous placement error (Euclidean distance to goal in meters), contact forces (Newtons), and safety violation durations.
+* **Provenance Tracking:** Every telemetry record logs model name, model digest, git commit hash, and safety monitor version.
+
+---
+
+## Limitations
+
+* **Simulation Only:** All evaluations are conducted in PyBullet physics simulation; transfer to physical hardware remains subject to real-world sim-to-real gaps.
+* **Tested Models:** Benchmark baselines focus on open-weight Llama-3 (8B) via Ollama and deterministic Scripted Oracle controllers.
+* **Task Geometries:** Evaluated on tabletop pick-and-place and 2-block obstacle clearance environments.
 
 ---
 
 ## Citation
 
-If you use Alpha in your research or find this benchmark helpful, please cite our preprint:
+If you use Alpha in your research or wish to cite the benchmark, please use the following BibTeX entry:
 
 ```bibtex
 @article{jona2026alpha,

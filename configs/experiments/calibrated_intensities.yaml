@@ -1,20 +1,21 @@
+# Calibrated fault intensities for Alpha v2 matrix
 F1_sensor_lag:
-  formula: 0.10 + 1.40 * intensity
-  low_param_seconds: 0.38
-  medium_param_seconds: 0.8
-  high_param_seconds: 1.36
+  description: "Observation staleness duration in seconds"
+  low: 0.50
+  medium: 0.75
+  high: 1.00
 F2_grip_slip:
-  formula: 0.10 + 0.85 * intensity
-  low_slip_prob: 0.27
-  medium_slip_prob: 0.525
-  high_slip_prob: 0.865
+  description: "Grip constraint release probability during lift phase"
+  low: 0.30
+  medium: 0.50
+  high: 0.70
 F3_unreachable_ik:
-  formula: 0.03 + 0.27 * intensity
-  low_offset_meters: 0.0705
-  medium_offset_meters: 0.138
-  high_offset_meters: 0.2595
+  description: "End-effector target offset magnitude in meters (low allows partial success under 0.08m tolerance)"
+  low: 0.05
+  medium: 0.12
+  high: 0.25
 F4_planner_corruption:
-  formula: 0.20 + 0.80 * intensity
-  low_corruption_prob: 0.36
-  medium_corruption_prob: 0.6
-  high_corruption_prob: 0.92
+  description: "Probability of schema key deletion / syntax corruption at serialization boundary"
+  low: 0.30
+  medium: 0.50
+  high: 0.80

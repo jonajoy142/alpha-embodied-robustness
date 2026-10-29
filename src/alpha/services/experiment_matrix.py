@@ -136,15 +136,43 @@ def configure_pybullet_determinism() -> None:
         p.setRandomSeed(0)
 
 
+CALIBRATED_INTENSITY_VALUES: dict[FaultType, dict[IntensityLabel, dict[str, Any]]] = {
+    FaultType.SENSOR_LAG: {
+        IntensityLabel.LOW: {"lag_seconds": 0.50},
+        IntensityLabel.MEDIUM: {"lag_seconds": 0.75},
+        IntensityLabel.HIGH: {"lag_seconds": 1.00},
+    },
+    FaultType.GRIP_SLIP: {
+        IntensityLabel.LOW: {"slip_probability": 0.30, "weaken_force_factor": 0.0},
+        IntensityLabel.MEDIUM: {"slip_probability": 0.50, "weaken_force_factor": 0.0},
+        IntensityLabel.HIGH: {"slip_probability": 0.70, "weaken_force_factor": 0.0},
+    },
+    FaultType.UNREACHABLE_IK: {
+        IntensityLabel.LOW: {"offset_magnitude": 0.05, "offset": (1.0, 0.0, 0.0)},
+        IntensityLabel.MEDIUM: {"offset_magnitude": 0.12, "offset": (1.0, 0.0, 0.0)},
+        IntensityLabel.HIGH: {"offset_magnitude": 0.25, "offset": (1.0, 0.0, 0.0)},
+    },
+    FaultType.PLANNER_OUTPUT_CORRUPTION: {
+        IntensityLabel.LOW: {"corruption_probability": 0.30, "inject_malformed_chars": False},
+        IntensityLabel.MEDIUM: {"corruption_probability": 0.50, "inject_malformed_chars": True},
+        IntensityLabel.HIGH: {"corruption_probability": 0.80, "inject_malformed_chars": True},
+    },
+}
+
+
 def intensity_params_for_fault(fault_type: FaultType, label: IntensityLabel) -> FaultIntensity:
     """Map qualitative intensity labels to calibrated fault-specific severity knobs."""
-    scalar = INTENSITY_SCALAR[label]
+    if fault_type in CALIBRATED_INTENSITY_VALUES and label in CALIBRATED_INTENSITY_VALUES[fault_type]:
+        params = CALIBRATED_INTENSITY_VALUES[fault_type][label]
+        return FaultIntensity(**params)
+
+    scalar = INTENSITY_SCALAR.get(label, 0.5)
     if fault_type == FaultType.SENSOR_LAG:
         return FaultIntensity(lag_seconds=round(0.10 + 1.40 * scalar, 4))
     if fault_type == FaultType.GRIP_SLIP:
         return FaultIntensity(slip_probability=min(0.95, round(0.10 + 0.85 * scalar, 4)), weaken_force_factor=0.0)
     if fault_type == FaultType.UNREACHABLE_IK:
-        return FaultIntensity(offset_magnitude=round(0.03 + 0.27 * scalar, 4), offset=(1.0, 0.0, 0.0))
+        return FaultIntensity(offset_magnitude=round(0.01 + 0.24 * scalar, 4), offset=(1.0, 0.0, 0.0))
     if fault_type == FaultType.PLANNER_OUTPUT_CORRUPTION:
         return FaultIntensity(
             corruption_probability=min(1.0, round(0.20 + 0.80 * scalar, 4)),

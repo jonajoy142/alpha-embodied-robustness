@@ -59,6 +59,18 @@ class ExperimentTelemetryRecord(BaseModel):
     observation_lag_observed: float = 0.0
     observation_difference: float | None = None
     final_block_target_distance: float | None = None
+    placement_error_meters: float | None = None
+    realized_corruption_rate: float = 0.0
+    validation_rejection_rate: float = 0.0
+    no_fault_schema_success: bool = True
+    workspace_violation_count: int = 0
+    workspace_violation_duration_steps: int = 0
+    robot_model: str = "kuka_iiwa"
+    contact_force_unit: str = "N"
+    grip_force_unit: str = "N"
+    task_family: str = "single_pick_place"
+    mitigation_strategy: str = "none"
+    mitigation_recovered: bool = False
     git_commit: str = ""
     git_dirty: bool = False
     config_version: str = ""
@@ -103,6 +115,7 @@ class ExperimentTelemetryRecord(BaseModel):
             "post_fault_completion_time_wall_seconds",
             "observation_difference",
             "final_block_target_distance",
+            "placement_error_meters",
         ):
             if payload.get(key) in ("", None):
                 payload[key] = None
@@ -155,6 +168,17 @@ class ExperimentTelemetryRecord(BaseModel):
         payload["timed_out"] = str(payload.get("timed_out")).lower() in {"1", "true", "yes"}
         payload["git_dirty"] = str(payload.get("git_dirty")).lower() in {"1", "true", "yes"}
         payload["is_accepted"] = str(payload.get("is_accepted", "true")).lower() in {"1", "true", "yes"}
+        payload["realized_corruption_rate"] = float(payload.get("realized_corruption_rate") or 0.0)
+        payload["validation_rejection_rate"] = float(payload.get("validation_rejection_rate") or 0.0)
+        payload["workspace_violation_count"] = int(float(payload.get("workspace_violation_count") or 0))
+        payload["workspace_violation_duration_steps"] = int(float(payload.get("workspace_violation_duration_steps") or 0))
+        payload["no_fault_schema_success"] = str(payload.get("no_fault_schema_success", "true")).lower() in {"1", "true", "yes"}
+        payload["mitigation_recovered"] = str(payload.get("mitigation_recovered", "false")).lower() in {"1", "true", "yes"}
+        payload.setdefault("robot_model", "kuka_iiwa")
+        payload.setdefault("contact_force_unit", "N")
+        payload.setdefault("grip_force_unit", "N")
+        payload.setdefault("task_family", "single_pick_place")
+        payload.setdefault("mitigation_strategy", "none")
         payload.setdefault("experiment_id", "")
         payload.setdefault("failure_reason", "")
         payload.setdefault("fault_trigger", "")

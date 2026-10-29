@@ -10,6 +10,11 @@ from typing import Any
 from alpha.clients.chaos_robotics_wrapper import ChaosRoboticsWrapper, PyBulletChaosRoboticsWrapper
 from alpha.clients.experiment_llm_clients import ChaosPlannerLLMClient, RateLimitedLLMClient, TelemetryLLMClient
 from alpha.clients.llm_client import LLMClient, build_llm_client
+from alpha.plugins.planner_adapter import (
+    LLMPlannerAdapter,
+    MitigationStrategy,
+    OraclePlannerAdapter,
+)
 from alpha.clients.safety_monitor import PyBulletSafetyMonitor
 from alpha.clients.simulator_client import PyBulletSimulatorClient
 from alpha.clients.telemetry_simulator_wrapper import TelemetrySimulatorWrapper
@@ -96,17 +101,32 @@ def execute_matrix_episode(
     scene_service.build_and_settle(gui=False)
 
     planner_type = getattr(agent_config, "planner_type", "llm")
+    mitigation_str = getattr(agent_config, "mitigation_strategy", "none")
+    try:
+        mitigation = MitigationStrategy(mitigation_str)
+    except ValueError:
+        mitigation = MitigationStrategy.NONE
+
     if planner_type == "scripted_oracle":
-        brain = ScriptedOraclePlanner()
+        # Pass Oracle through PlannerAdapter so it undergoes identical JSON serialization,
+        # F4 chaos interception, and Pydantic validation as the LLM
+        oracle_planner = ScriptedOraclePlanner()
+        brain = OraclePlannerAdapter(
+            oracle=oracle_planner,
+            chaos_wrapper=chaos_wrapper if _needs_planner_wrapper(scenario, chaos_config) else None,
+            mitigation=mitigation,
+        )
     else:
         llm_client: LLMClient = RateLimitedLLMClient(
             build_llm_client(agent_config),
             min_interval_seconds=llm_min_interval,
         )
         llm_client = TelemetryLLMClient(llm_client, telemetry)
-        if chaos_wrapper is not None and _needs_planner_wrapper(scenario, chaos_config):
-            llm_client = ChaosPlannerLLMClient(llm_client, chaos_wrapper)
-        brain = AgentBrain(llm_client)
+        brain = LLMPlannerAdapter(
+            llm_client=llm_client,
+            chaos_wrapper=chaos_wrapper if _needs_planner_wrapper(scenario, chaos_config) else None,
+            mitigation=mitigation,
+        )
 
     control_service = ControlService(instrumented)
     agent_service = AgentService(brain, control_service, instrumented)
@@ -199,6 +219,24 @@ def execute_matrix_episode(
             final_block_target_distance=final_dist,
             observation_difference=obs_diff,
         )
+        if hasattr(brain, "mitigation_recovered"):
+            record.mitigation_recovered = brain.mitigation_recovered
+        if hasattr(brain, "mitigation"):
+            record.mitigation_strategy = brain.mitigation.value
+        if hasattr(brain, "last_validation_error"):
+            record.validation_rejection_rate = 1.0 if brain.last_validation_error is not None else 0.0
+            if scenario.scenario_group == "control":
+                record.no_fault_schema_success = (brain.last_validation_error is None)
+
+        if chaos_wrapper is not None:
+            f4_events = [
+                e for e in chaos_wrapper.event_log()
+                if e.get("fault_type") == FaultType.PLANNER_OUTPUT_CORRUPTION.value
+                or e.get("hook") == "intercept_planner_output"
+            ]
+            if f4_events:
+                corrupted_count = sum(1 for e in f4_events if e.get("corrupted", False) or e.get("fault_applied", False))
+                record.realized_corruption_rate = round(corrupted_count / len(f4_events), 4)
         if result is not None:
             episode_repo.save(result)
         if data_repo is not None:
